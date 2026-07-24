@@ -1,0 +1,155 @@
+{
+  "manifest_version": 3,
+  "name": "Sweater — AI Context Transfer & Intelligence Platform",
+  "version": "2.0.0",
+  "description": "Intelligent context platform for AI chats. Categorize, Smart Save checkpoints, compress, and run floating Mini Sweater assistants anywhere.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "storage",
+    "clipboardWrite",
+    "clipboardRead",
+    "downloads",
+    "contextMenus",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://chat.openai.com/*",
+    "https://chatgpt.com/*",
+    "https://claude.ai/*",
+    "https://gemini.google.com/*",
+    "https://grok.com/*",
+    "https://x.com/*",
+    "https://copilot.microsoft.com/*",
+    "https://www.perplexity.ai/*",
+    "https://poe.com/*",
+    "https://character.ai/*",
+    "https://huggingface.co/*",
+    "https://mistral.ai/*",
+    "https://chat.mistral.ai/*",
+    "https://www.phind.com/*",
+    "https://you.com/*",
+    "https://api.anthropic.com/*",
+    "https://api.openai.com/*",
+    "https://api.groq.com/*",
+    "https://api.deepseek.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "https://groq.com/*",
+    "https://console.groq.com/*",
+    "https://chat.groq.com/*",
+    "https://*.deepseek.com/*",
+    "https://*.mistral.ai/*",
+    "https://*.openrouter.ai/*",
+    "https://openrouter.ai/*",
+    "https://*.qwen.ai/*",
+    "http://localhost:11434/*",
+    "http://127.0.0.1:11434/*",
+    "http://localhost:1234/*",
+    "http://127.0.0.1:1234/*",
+    "https://integrate.api.nvidia.com/*"
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://grok.com/*",
+        "https://x.com/*",
+        "https://copilot.microsoft.com/*",
+        "https://www.perplexity.ai/*",
+        "https://poe.com/*",
+        "https://character.ai/*",
+        "https://huggingface.co/*",
+        "https://mistral.ai/*",
+        "https://chat.mistral.ai/*",
+        "https://www.phind.com/*",
+        "https://you.com/*",
+        "https://chat.groq.com/*",
+        "https://*.deepseek.com/*",
+        "https://*.mistral.ai/*",
+        "https://*.openrouter.ai/*",
+        "https://*.qwen.ai/*"
+      ],
+      "js": [
+        "shared/storage.js",
+        "shared/telemetry.js",
+        "shared/settings.js",
+        "shared/event_bus.js",
+        "shared/registry.js",
+        "shared/prompts.js",
+        "shared/state.js",
+        "shared/try_models.js",
+        "shared/plugins.js",
+        "content/adapters.js",
+        "content/mini_sweater.js",
+        "content/content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content/inject.css"],
+      "matches": [
+        "https://chat.openai.com/*",
+        "https://chatgpt.com/*",
+        "https://claude.ai/*",
+        "https://gemini.google.com/*",
+        "https://grok.com/*",
+        "https://x.com/*",
+        "https://copilot.microsoft.com/*",
+        "https://www.perplexity.ai/*",
+        "https://poe.com/*",
+        "https://character.ai/*",
+        "https://huggingface.co/*",
+        "https://mistral.ai/*",
+        "https://chat.mistral.ai/*",
+        "https://www.phind.com/*",
+        "https://you.com/*",
+        "https://chat.groq.com/*",
+        "https://*.deepseek.com/*",
+        "https://*.mistral.ai/*",
+        "https://*.openrouter.ai/*",
+        "https://*.qwen.ai/*"
+      ]
+    }
+  ],
+  "commands": {
+    "toggle-panel": {
+      "suggested_key": {
+        "default": "Alt+C"
+      },
+      "description": "Open/close Sweater panel"
+    },
+    "quick-knit": {
+      "suggested_key": {
+        "default": "Alt+K"
+      },
+      "description": "Quick-knit current conversation"
+    },
+    "hide-fab": {
+      "suggested_key": {
+        "default": "Alt+H"
+      },
+      "description": "Hide/show the Sweater FAB button (desktop only)"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
