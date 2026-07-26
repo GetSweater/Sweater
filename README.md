@@ -1,4 +1,6 @@
-# 🧶 Sweater — AI Context Transfer & Intelligence Platform MVP - A Browser Extension no installation directly Download Zip and Go to extension in browser and turn on developer mode and make it load unpacked and sweater is ready to use
+# 🧶 Sweater — AI Context Transfer & Intelligence Platform MVP  
+Don't know how to get it? -
+A Browser Extension no installation directly Download Zip from release to avoid ambiguity and Go to extension in browser and turn on developer mode and make it load unpacked and sweater is ready to use
 
 **Carry your conversation from one AI to another — without losing the thread.**
 
