@@ -1,4 +1,4 @@
-# 🧶 Sweater — AI Context Transfer & Intelligence Platform MVP
+# 🧶 Sweater — AI Context Transfer & Intelligence Platform MVP - A Browser Extension no installation directly install and open developer mode and make it pack unload and sweater is ready to use
 
 **Carry your conversation from one AI to another — without losing the thread.**
 
