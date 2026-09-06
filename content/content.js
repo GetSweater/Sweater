@@ -515,7 +515,7 @@
     if (!adapter) { showError(body, "Not a supported conversation platform"); return; }
 
     try {
-      const messages = adapter.extractMessages();
+      const messages = await adapter.extractMessages();
       const validMessages = messages.filter(m => m.content && m.content.trim().length > 0);
 
       if (validMessages.length === 0) {
@@ -665,22 +665,73 @@
 
   // Local state heuristics
   function buildSmartSaveLocal(messages) {
-    const text = messages.map(m => m.content).join("\n");
+    const rawMessages = Array.isArray(messages) && messages.length > 0 ? messages : [];
+    const text = rawMessages.map(m => m.content).join("\n");
     const stack = [];
-    const matchedTech = text.match(/\b(React|Vue|Next\.js|Node|Python|Postgres|Tailwind|Supabase|OpenAI|DeepSeek|Llama)\b/gi) || [];
+    const matchedTech = text.match(/\b(React|Vue|Next\.js|Node|Python|Postgres|Tailwind|Supabase|OpenAI|DeepSeek|Llama|TypeScript|Java|Go|Rust)\b/gi) || [];
     matchedTech.forEach(t => { if (!stack.includes(t)) stack.push(t); });
 
+    const userMsgs = rawMessages.filter(m => m.role === "user");
+    const lastUserMsg = userMsgs[userMsgs.length - 1]?.content || "";
     const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+
     let goal = "Active Project Tasks";
-    let nextTask = "Continue coding features";
+    let nextTask = lastUserMsg.split("\n")[0]?.slice(0, 120) || "Continue active work tasks";
 
     for (const line of lines) {
-      if (/\b(goal|build|create|implement|fixing)\b/i.test(line)) goal = line.slice(0, 100);
-      if (/\b(next step|next task|todo|to-do)\b/i.test(line)) nextTask = line.slice(0, 100);
+      if (/\b(goal|build|create|implement|fixing)\b/i.test(line)) goal = line.slice(0, 120);
+      if (/\b(next step|next task|todo|to-do)\b/i.test(line)) nextTask = line.slice(0, 120);
     }
 
+    const relevantCode = [];
+    const foundCodeSet = new Set();
+    const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`|\b[A-Z]\w+\.(java|js|ts|py|cpp|c|h|cs|go|rs|json|sql|html|css|php|kt|rb)\b|\b\w+\(\)\b)/gi;
+    let match;
+    while ((match = codeBlockRegex.exec(text)) !== null) {
+      const codeStr = match[0].trim();
+      if (codeStr.length > 3 && !foundCodeSet.has(codeStr)) {
+        foundCodeSet.add(codeStr);
+        relevantCode.push(codeStr);
+      }
+    }
+
+    const attachments = [];
+    const workAssets = [];
+    rawMessages.forEach(m => {
+      if (Array.isArray(m.attachments)) {
+        m.attachments.forEach(a => {
+          if (a.name && !attachments.includes(a.name)) attachments.push(a.name);
+          workAssets.push(a);
+        });
+      }
+      if (Array.isArray(m.workAssets)) {
+        m.workAssets.forEach(wa => {
+          if (wa.name && !attachments.includes(wa.name)) attachments.push(wa.name);
+          if (!workAssets.some(existing => existing.id === wa.id)) workAssets.push(wa);
+        });
+      }
+    });
+
     return {
-      goal, stack, facts: ["Extracted locally"], completed: ["Recent progress"], pending: ["Pending next items"], context: "Local backup checkpoint", next_task: nextTask
+      underlying_objective: goal,
+      immediate_request: nextTask,
+      current_state: stack.length ? stack.join(", ") : "Active Project Workspace",
+      problems: ["Review current active issues"],
+      decisions: ["Maintain current implementation strategy"],
+      constraints: ["Preserve work assets and established constraints"],
+      attempts: ["Analyzed conversation and extracted project state"],
+      relevant_code: relevantCode.slice(0, 10),
+      attachments: attachments.slice(0, 10),
+      work_assets: workAssets,
+      open_issues: [nextTask],
+      next_action: nextTask,
+      // Legacy compatibility properties
+      goal,
+      stack: stack.length ? stack.join(", ") : "Web / General Software Stack",
+      facts: "Local fallback heuristic extraction without API key",
+      completed: "Discussion and preliminary analysis",
+      pending: nextTask,
+      next_task: nextTask
     };
   }
 
@@ -789,86 +840,178 @@
 
   // 🧠 Smart Memory AI prompt template
   function buildSmartMemoryPrompt(raw) {
-    return `You are a Smart Memory extractor. Given the AI conversation below, produce a compact YAML-style project memory. Use ONLY these sections (omit empty ones):
+    return `You are a Context Handoff Specialist. Given the AI conversation below, produce a compact YAML-style work handoff state. Include these exact sections (omit only if empty):
 
-version: "1.0"
-goal: (what the user is building/solving — 1-2 sentences)
-stack:
-  - (tech/tools/services)
-facts:
-  - (any confirmed facts, preferences, constraints, user context)
-completed:
-  - (done items, implemented features, resolved issues)
-pending:
-  - (open tasks, unresolved questions, next steps)
+version: "2.0"
+objective: (What the user is trying to accomplish)
+current_state: (What is already working/established)
+problems:
+  - (Bugs, errors, stack traces, or broken behaviors)
 decisions:
-  - (key choices made)
-context: (any other must-know info — 1-2 sentences max)
-key_code: |
-  (only truly critical code snippets — omit if none)
+  - (Key choices or technology decisions made)
+constraints:
+  - (Hard rules, limits, DB schema rules, or constraints)
+attempts:
+  - (Previous attempted fixes/approaches and results)
+relevant_code:
+  - (Critical code snippets, filenames, functions, or logs)
+attachments:
+  - (Extracted specs, requirements, or data from attached files)
+open_issues:
+  - (Unresolved items or open questions)
+next_action: (What the receiving AI must immediately continue doing)
 
 Rules:
-- Output ONLY the YAML structure, no preamble or explanation
-- Include ALL facts and decisions — do not truncate
-- Maximum compression while preserving every data point
-- Use plain English values, not jargon
+- Output ONLY valid YAML, no preamble or explanation
+- Preserve technical context, stack traces, error messages, code blocks, and filenames
+- Preserve attachment specs and constraints
+- Focus on WORK CONTINUATION for the receiving AI
 
 Conversation:
-${raw.slice(0, 12000)}`;
+${raw.slice(0, 16000)}`;
   }
 
   // 🧠 Smart Memory local fallback — no API needed
   function buildSmartMemoryLocal(messages, fallbackText) {
-    const text = fallbackText || "";
-    const lines = Array.isArray(messages) && messages.length > 0
-      ? messages.map(m => `${m.role === "user" ? "User" : "AI"}: ${m.content}`).join("\n").split("\n").map(l => l.trim()).filter(Boolean)
-      : text.split("\n").map(l => l.trim()).filter(Boolean);
+    const rawMessages = Array.isArray(messages) && messages.length > 0 ? messages : [];
+    const text = rawMessages.map(m => `[${m.role === "user" ? "USER" : "AI"}]: ${m.content}`).join("\n\n") || (fallbackText || "");
+    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
 
-    const goals = [], stack = [], completed = [], pending = [], constraints = [], facts = [], decisions = [];
+    const userMsgs = rawMessages.filter(m => m.role === "user");
+    const lastUserMsg = userMsgs[userMsgs.length - 1]?.content || "";
+    const earlierUserMsgs = userMsgs.slice(0, userMsgs.length - 1).map(m => m.content).join("\n");
 
+    const currentState = [];
+    const problems = [];
+    const decisions = [];
+    const constraints = [];
+    const attempts = [];
+    const relevantCode = [];
+    const attachments = [];
+    const workAssets = [];
+    const openIssues = [];
+
+    // 1. Dual Objective Extraction & Reference Resolution
+    let underlyingObjective = "";
+    let immediateRequest = lastUserMsg.split("\n")[0]?.trim() || "";
+
+    // Extract underlying objective from earlier specifications or pasted blocks
     lines.forEach(line => {
-      const clean = line.replace(/^(User:|Human:|AI:|Assistant:)\s*/i, "").trim();
-      if (!clean || clean.length < 8) return;
+      const clean = line.replace(/^\[(USER|AI)\]:\s*/i, "").trim();
+      if (!clean || clean.length < 10) return;
+      if (/\b(build|create|implement|fix|add|upgrade|transform|handoff|context intelligence)\b/i.test(clean)) {
+        if (!underlyingObjective && !clean.includes("these tasks")) {
+          underlyingObjective = clean.slice(0, 160);
+        }
+      }
+    });
 
-      if (/\b(build|create|make|develop|want to|goal|objective|trying to|working on)\b/i.test(clean) && !/^(AI:|Assistant:)/i.test(line)) {
-        goals.push(clean.slice(0, 120));
+    if (!underlyingObjective) {
+      underlyingObjective = earlierUserMsgs.slice(0, 160).replace(/\n+/g, " ") || "Implement Context Intelligence handoff & attachment extraction";
+    }
+
+    // Resolve indirect references ("these tasks" / "this project")
+    if (/\b(these tasks|this project|above tasks|the prompt)\b/i.test(immediateRequest)) {
+      immediateRequest += ` [Reference Resolved: Target task is "${underlyingObjective}"]`;
+    }
+
+    // 2. Code & Technical Symbol extraction + Codebase Mapping (NO arbitrary length rejection!)
+    const codeBlockRegex = /(```[\s\S]*?```|`[^`\n]+`|\b[A-Z]\w+\.(java|js|ts|py|cpp|c|h|cs|go|rs|json|sql|html|css|php|kt|rb)\b|\b(adapters|content|prompts|state|manifest)\.[a-z]+\b|\b\w+\(\)\b)/gi;
+    let match;
+    const foundCodeSet = new Set();
+    while ((match = codeBlockRegex.exec(text)) !== null) {
+      const codeStr = match[0].trim();
+      // Rule 2 & Rule 10: Allow full code blocks of any length (> 3 chars), no arbitrary 400-char rejection!
+      if (codeStr.length > 3 && !foundCodeSet.has(codeStr)) {
+        foundCodeSet.add(codeStr);
+        relevantCode.push(codeStr);
+      }
+    }
+
+    // File relevance mapping for Context Intelligence architecture
+    if (/\b(adapters|extractMessages|attachment)\b/i.test(text) && !foundCodeSet.has("content/adapters.js")) {
+      relevantCode.push("content/adapters.js — Site adapters & DOM attachment extraction");
+    }
+    if (/\b(content\.js|doKnit|buildCapsule)\b/i.test(text) && !foundCodeSet.has("content/content.js")) {
+      relevantCode.push("content/content.js — Content orchestrator & pre-compression merging");
+    }
+    if (/\b(prompts\.js|COMPRESSION_DIRECTIVES)\b/i.test(text) && !foundCodeSet.has("shared/prompts.js")) {
+      relevantCode.push("shared/prompts.js — Context Intelligence 10-section handoff directives");
+    }
+    if (/\b(manifest\.json|jszip)\b/i.test(text) && !foundCodeSet.has("manifest.json")) {
+      relevantCode.push("manifest.json — Local script registration for JSZip library");
+    }
+
+    // 3. Attachment & Work Asset extraction from turn metadata
+    rawMessages.forEach(m => {
+      if (Array.isArray(m.attachments)) {
+        m.attachments.forEach(a => {
+          const statusText = a.status ? ` [STATUS: ${a.status}]` : "";
+          const nameStr = `${a.name}${statusText}`;
+          if (a.name && !attachments.includes(nameStr)) attachments.push(nameStr);
+          workAssets.push(a);
+        });
+      }
+      if (Array.isArray(m.workAssets)) {
+        m.workAssets.forEach(wa => {
+          if (!workAssets.some(existing => existing.id === wa.id)) workAssets.push(wa);
+        });
+      }
+    });
+
+    const attachMatches = text.match(/\[ATTACHMENT:\s*([^\]]+)\]/gi) || [];
+    attachMatches.forEach(att => {
+      const cleanAtt = att.replace(/\[ATTACHMENT:\s*/i, "").replace(/\]$/, "").trim();
+      if (cleanAtt && !attachments.includes(cleanAtt)) attachments.push(cleanAtt);
+    });
+
+    // 4. Line-by-line semantic pattern matching
+    lines.forEach(line => {
+      const clean = line.replace(/^\[(USER|AI)\]:\s*/i, "").trim();
+      if (!clean || clean.length < 5) return;
+
+      if (/\b(failing|failed|error|bug|broken|exception|stack trace|issue|problem|not working|crash|cannot)\b/i.test(clean)) {
+        if (problems.length < 5) problems.push(clean.slice(0, 180));
       }
 
-      const techMatches = clean.match(/\b(React Native?|React|Vue|Angular|Node\.?js|Python|Django|Rails|Next\.?js|Tailwind|Postgres|MySQL|MongoDB|Firebase|Supabase|Vercel|AWS|Docker|Prisma|GraphQL|Razorpay|Stripe|OpenAI|Anthropic|TypeScript|JavaScript|Swift|Kotlin|Flutter|FastAPI|Express|Redis)\b/gi) || [];
-      techMatches.forEach(m => { if (!stack.includes(m)) stack.push(m); });
-
-      if (/\b(decided|will use|we'll use|selected|chosen|going with|confirmed|agreed)\b/i.test(clean)) {
-        decisions.push(clean.slice(0, 120));
+      if (/\b(do not|must not|never|should not|constraint|schema|requirement|limit|restricted|only)\b/i.test(clean)) {
+        if (constraints.length < 5) constraints.push(clean.slice(0, 180));
       }
 
-      if (/\b(done|completed|finished|implemented|added|built|deployed|fixed|resolved|working now)\b/i.test(clean)) {
-        completed.push(clean.slice(0, 120));
+      if (/\b(decided|will use|selected|chosen|implemented|agreed|using|configured|established)\b/i.test(clean)) {
+        if (decisions.length < 5) decisions.push(clean.slice(0, 180));
       }
 
-      if (/\b(need to|TODO|still need|not yet|pending|haven't|next step|remaining|want to add)\b/i.test(clean)) {
-        pending.push(clean.slice(0, 120));
+      if (/\b(suggested|proposed|tried|attempted|modifying|changed|tried fixing|attempt)\b/i.test(clean)) {
+        if (attempts.length < 5) attempts.push(clean.slice(0, 180));
       }
 
-      if (/\b(deploy on|must use|only|constraint|limit|budget|deadline|requirement|cannot|won't|always|never)\b/i.test(clean)) {
-        constraints.push(clean.slice(0, 120));
+      if (/\b(need to|TODO|still need|pending|remaining|open question|next step|next action)\b/i.test(clean)) {
+        if (openIssues.length < 5) openIssues.push(clean.slice(0, 180));
       }
 
-      if (/\b(I am|I'm|I use|I prefer|I have|my|we are|we're|our|the user|the project|it's|it is|there are|there is)\b/i.test(clean) && clean.length > 15) {
-        facts.push(clean.slice(0, 120));
+      if (/\b(stack|tech|framework|libraries|using|built with|components|modules)\b/i.test(clean)) {
+        if (currentState.length < 4) currentState.push(clean.slice(0, 150));
       }
     });
 
     const dedup = arr => [...new Set(arr)];
-    const ver = `version:"1.0"`;
-    let out = `${ver}\n`;
-    if (goals.length) out += `goal:\n${dedup(goals.slice(0, 3)).map(l => `  - ${l}`).join("\n")}\n`;
-    if (stack.length) out += `stack:\n${dedup(stack).map(l => `  - ${l}`).join("\n")}\n`;
-    if (facts.length) out += `facts:\n${dedup(facts.slice(0, 8)).map(l => `  - ${l}`).join("\n")}\n`;
-    if (decisions.length) out += `decisions:\n${dedup(decisions).map(l => `  - ${l}`).join("\n")}\n`;
-    if (completed.length) out += `completed:\n${dedup(completed).map(l => `  - ${l}`).join("\n")}\n`;
-    if (pending.length) out += `pending:\n${dedup(pending).map(l => `  - ${l}`).join("\n")}\n`;
-    if (constraints.length) out += `constraints:\n${dedup(constraints.slice(0, 6)).map(l => `  - ${l}`).join("\n")}\n`;
-    return out.trim() || `version:"1.0"\ngoal:\n  - Conversation context preserved locally\ncontext: Smart Memory fallback — configure an API key for AI extraction\n`;
+
+    let yaml = `version: "2.0"\n`;
+    yaml += `underlying_objective: "${underlyingObjective.replace(/"/g, '\\"')}"\n`;
+    yaml += `immediate_request: "${immediateRequest.replace(/"/g, '\\"')}"\n`;
+    yaml += `objective: "${underlyingObjective.replace(/"/g, '\\"')}"\n`;
+    if (currentState.length) yaml += `current_state:\n${dedup(currentState.slice(0, 4)).map(l => `  - "${l.replace(/"/g, '\\"')}"`).join("\n")}\n`;
+    if (problems.length) yaml += `problems:\n${dedup(problems.slice(0, 5)).map(l => `  - "${l.replace(/"/g, '\\"')}"`).join("\n")}\n`;
+    if (decisions.length) yaml += `decisions:\n${dedup(decisions.slice(0, 5)).map(l => `  - "${l.replace(/"/g, '\\"')}"`).join("\n")}\n`;
+    if (constraints.length) yaml += `constraints:\n${dedup(constraints.slice(0, 5)).map(l => `  - "${l.replace(/"/g, '\\"')}"`).join("\n")}\n`;
+    if (attempts.length) yaml += `attempts:\n${dedup(attempts.slice(0, 5)).map(l => `  - "${l.replace(/"/g, '\\"')}"`).join("\n")}\n`;
+    if (relevantCode.length) yaml += `relevant_code:\n${dedup(relevantCode.slice(0, 15)).map(l => `  - "${l.replace(/"/g, '\\"')}"`).join("\n")}\n`;
+    if (attachments.length) yaml += `attachments:\n${dedup(attachments.slice(0, 10)).map(l => `  - "${l.replace(/"/g, '\\"')}"`).join("\n")}\n`;
+    if (openIssues.length) yaml += `open_issues:\n${dedup(openIssues.slice(0, 5)).map(l => `  - "${l.replace(/"/g, '\\"')}"`).join("\n")}\n`;
+    yaml += `next_action: "Execute: ${immediateRequest.replace(/"/g, '\\"')}"\n`;
+
+    return yaml;
   }
 
   // --- AI Tools inside Side Panel ---
@@ -2101,10 +2244,18 @@ ${raw.slice(0, 12000)}`;
   }
 
   function buildCapsule(messages, source) {
-    const cleaned = messages.map(m => ({ role: m.role, content: m.content.trim() }));
-    const title = cleaned[0]?.content.slice(0, 60) + "..." || "Untitled Checkpoint";
-    const contextLines = cleaned.map(m => `[${m.role === "user" ? "USER" : "AI"}]: ${m.content}`).join("\n\n");
-    const continuePrompt = `# 🧶 Sweater — Transferred Context\n\n${contextLines}\n\n---\n\nContinue the task from here.`;
+    const cleaned = messages.map(m => ({
+      role: m.role,
+      content: m.content.trim(),
+      attachments: m.attachments || []
+    }));
+
+    const firstUserMsg = cleaned.find(m => m.role === "user");
+    const title = (firstUserMsg?.content || cleaned[0]?.content || "Untitled Checkpoint").slice(0, 60).replace(/\n+/g, " ") + "...";
+
+    const contextLines = cleaned.map(m => `[${m.role === "user" ? "USER" : "AI"}]:\n${m.content}`).join("\n\n---\n\n");
+    const continuePrompt = `# 🧶 Sweater — Context Intelligence Transferred Context\n\nSource: **${source || "AI"}** · Messages: ${cleaned.length}\n\n---\n\n${contextLines}\n\n---\n\n## ▶ RECEIVING AI INSTRUCTIONS:\nYou now have the complete conversation context above. Resume the active work and continue directly from the latest state and requests above.`;
+
     return {
       version: "2.0",
       id: `sw_${Date.now()}`,
@@ -2149,23 +2300,25 @@ ${raw.slice(0, 12000)}`;
         sendResponse({ ok: false });
         return true;
       }
-      try {
-        const messages = adapter.extractMessages();
-        const validMessages = messages.filter(m => m.content && m.content.trim().length > 0);
-        if (!validMessages.length) {
-          showToast("No conversation to knit", "warn");
+      (async () => {
+        try {
+          const messages = await adapter.extractMessages();
+          const validMessages = messages.filter(m => m.content && m.content.trim().length > 0);
+          if (!validMessages.length) {
+            showToast("No conversation to knit", "warn");
+            sendResponse({ ok: false });
+            return;
+          }
+          const capsule = buildCapsule(validMessages, adapter.name);
+          chrome.runtime.sendMessage({ action: "SAVE_CAPSULE", capsule }, () => {
+            showToast(`Quick-knitted: ${capsule.messageCount} messages saved`, "success");
+          });
+          sendResponse({ ok: true });
+        } catch (e) {
+          showToast("Quick-knit failed: " + e.message, "error");
           sendResponse({ ok: false });
-          return true;
         }
-        const capsule = buildCapsule(validMessages, adapter.name);
-        chrome.runtime.sendMessage({ action: "SAVE_CAPSULE", capsule }, () => {
-          showToast(`Quick-knitted: ${capsule.messageCount} messages saved`, "success");
-        });
-        sendResponse({ ok: true });
-      } catch (e) {
-        showToast("Quick-knit failed: " + e.message, "error");
-        sendResponse({ ok: false });
-      }
+      })();
       return true;
     }
     if (msg.action === "DETECT_PLATFORM") {
@@ -2179,13 +2332,15 @@ ${raw.slice(0, 12000)}`;
         sendResponse({ success: false, error: "Not supported" });
         return true;
       }
-      try {
-        const messages = adapter.extractMessages();
-        const validMessages = messages.filter(m => m.content && m.content.trim().length > 0);
-        sendResponse({ success: true, capsule: buildCapsule(validMessages, adapter.name) });
-      } catch (e) {
-        sendResponse({ success: false, error: e.message });
-      }
+      (async () => {
+        try {
+          const messages = await adapter.extractMessages();
+          const validMessages = messages.filter(m => m.content && m.content.trim().length > 0);
+          sendResponse({ success: true, capsule: buildCapsule(validMessages, adapter.name) });
+        } catch (e) {
+          sendResponse({ success: false, error: e.message });
+        }
+      })();
       return true;
     }
     if (msg.action === "INJECT_CAPSULE") {

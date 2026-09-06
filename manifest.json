@@ -93,6 +93,7 @@
         "shared/state.js",
         "shared/try_models.js",
         "shared/plugins.js",
+        "shared/jszip.min.js",
         "content/adapters.js",
         "content/mini_sweater.js",
         "content/content.js"

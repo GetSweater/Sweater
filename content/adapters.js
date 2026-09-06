@@ -52,18 +52,264 @@
     return null;
   }
 
-  // Helper: File Attachment Check
-  function fileAttachConfirmed() {
-    const selectors = [
-      '[data-testid*="attachment"]', '[class*="attachment-chip"]', '[class*="file-chip"]',
-      '[class*="attached-file"]', '[aria-label*="attachment" i]', '[class*="file-preview"]',
-    ];
-    for (const sel of selectors) {
+  // Helper: Resolve Universal Work Asset Data (Code, Images, PDFs, PPTs, Spreadsheets, Archives, Resumes)
+  async function resolveAttachmentData(el, name, type, href) {
+    const filename = (name || el.getAttribute("alt") || el.getAttribute("aria-label") || "attached_work_asset").trim();
+    const cleanType = (type || filename.split('.').pop() || "").toLowerCase();
+
+    const assetId = `asset_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    let assetType = "other";
+    let purpose = "unknown";
+    let relationship = "reference_for_current_task";
+    let relevance = "important";
+    let preserveOriginal = true;
+    let extractionStatus = "extracted";
+    let content = "";
+    let originalData = href || el.getAttribute("src") || null;
+    let metadata = {};
+
+    // 1. Image Asset DOM Resolution (Screenshots, Brand Logos, UI References, Image-Gen References)
+    const isImgEl = el.tagName === "IMG" || el.querySelector("img") || /png|jpg|jpeg|gif|webp|svg/i.test(cleanType) || el.getAttribute("src") || (el.className || "").toString().includes("image");
+    if (isImgEl) {
+      assetType = "image";
+      purpose = /logo|brand/i.test(filename) ? "branding_asset" : /ref|style|prompt|gen/i.test(filename) ? "image-generation reference" : "visual_reference";
+      relationship = "visual_reference";
+      const imgSrc = el.getAttribute("src") || el.querySelector("img")?.getAttribute("src") || href || "";
+      const altText = el.getAttribute("alt") || el.querySelector("img")?.getAttribute("alt") || "";
+      originalData = imgSrc;
+      metadata = { altText, dimensions: { width: el.clientWidth || 0, height: el.clientHeight || 0 } };
+      extractionStatus = imgSrc ? (imgSrc.startsWith("data:") ? "durable_reference" : "session_only") : "metadata_only";
+
+      const imgFormatted = `\n[IMAGE ASSET: ${filename}]\nSTATUS: ${extractionStatus}\nROLE: Visual reference context (${purpose})\nSRC/DATA: ${imgSrc.slice(0, 300)}${imgSrc.length > 300 ? "..." : ""}\nALT: ${altText || "None provided"}\n`;
+
+      return {
+        id: assetId,
+        name: filename,
+        type: assetType,
+        mimeType: `image/${cleanType || "png"}`,
+        source: imgSrc || href || "DOM",
+        content: altText ? `Visual description/alt: ${altText}` : "",
+        metadata,
+        purpose,
+        relationship,
+        relevance,
+        preserveOriginal: true,
+        originalData,
+        extractionStatus,
+        status: "accessible",
+        formatted: imgFormatted
+      };
+    }
+
+    // 2. Pasted Text Block / Pasted Card DOM Resolution
+    const isPastedBlock = /pasted|snippet|clipboard|text/i.test(filename) || (el.className || "").toString().includes("pasted") || el.getAttribute("data-testid")?.includes("pasted");
+    if (isPastedBlock) {
+      const fullPastedText = el.getAttribute("data-content") || el.getAttribute("data-text") || el.querySelector("pre, code, [class*='content']")?.innerText || "";
+      if (fullPastedText.length > 10) {
+        return {
+          id: assetId,
+          name: filename,
+          type: "pasted_text",
+          mimeType: "text/plain",
+          source: "DOM",
+          content: fullPastedText,
+          metadata: { length: fullPastedText.length },
+          purpose: "source_material",
+          relationship: "input_to_edit",
+          relevance: "critical",
+          preserveOriginal: true,
+          originalData: fullPastedText,
+          extractionStatus: "extracted",
+          status: "accessible",
+          formatted: `\n[PASTED TEXT / SPECIFICATION BLOCK: ${filename}]\nSTATUS: accessible\nCONTENT:\n${fullPastedText}\n`
+        };
+      }
+    }
+
+    // 3. ZIP Archive Resolution (Task-Agnostic Project/Codebase Archive)
+    const isZip = cleanType === "zip" || filename.endsWith(".zip");
+    if (isZip && href) {
       try {
-        if (document.querySelector(sel)) return true;
+        const res = await fetch(href);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const arrayBuffer = await res.arrayBuffer();
+
+        if (typeof globalThis.JSZip !== "undefined") {
+          const zip = await globalThis.JSZip.loadAsync(arrayBuffer);
+          const fileIndex = [];
+          const extractedFiles = [];
+
+          const sourceExts = new Set(["js", "ts", "jsx", "tsx", "py", "java", "json", "md", "css", "html", "c", "cpp", "h", "cs", "go", "rs", "sql", "kt", "sh", "txt", "csv", "xml", "yaml", "yml"]);
+
+          for (const relativePath of Object.keys(zip.files)) {
+            const entry = zip.files[relativePath];
+            if (entry.dir) continue;
+            const ext = relativePath.split('.').pop()?.toLowerCase() || "";
+            fileIndex.push({ path: relativePath, size: entry._data?.length || 0 });
+
+            if (sourceExts.has(ext) && !relativePath.includes("node_modules") && !relativePath.includes(".git")) {
+              try {
+                const text = await entry.async("text");
+                if (text && text.trim()) {
+                  extractedFiles.push({ path: relativePath, content: text });
+                }
+              } catch (e) { }
+            }
+          }
+
+          const indexList = fileIndex.slice(0, 50).map(f => `  - ${f.path} (${f.size} B)`).join("\n");
+          const extractedBlocks = extractedFiles.slice(0, 15).map(f => `--- FILE: ${f.path} ---\n${f.content}`).join("\n\n");
+
+          return {
+            id: assetId,
+            name: filename,
+            type: "archive",
+            mimeType: "application/zip",
+            source: href,
+            content: extractedBlocks,
+            metadata: { fileCount: fileIndex.length, index: fileIndex },
+            purpose: "codebase_implementation",
+            relationship: "implementation_dependency",
+            relevance: "critical",
+            preserveOriginal: true,
+            originalData: extractedFiles,
+            extractionStatus: "extracted",
+            status: "accessible",
+            formatted: `\n[ATTACHMENT: ${filename} (ZIP Archive — ${fileIndex.length} files)]\nSTATUS: accessible\nARCHIVE INDEX:\n${indexList}\n\nRELEVANT PROJECT FILES:\n${extractedBlocks}\n`
+          };
+        }
+      } catch (e) {
+        return {
+          id: assetId,
+          name: filename,
+          type: "archive",
+          mimeType: "application/zip",
+          source: href || "DOM",
+          content: "",
+          metadata: { reason: e.message },
+          purpose: "codebase_implementation",
+          relationship: "implementation_dependency",
+          relevance: "important",
+          preserveOriginal: true,
+          originalData: href || null,
+          extractionStatus: href ? "durable_reference" : "metadata_only",
+          status: "preserved_original",
+          formatted: `\n[ATTACHMENT: ${filename}]\nSTATUS: preserved_original\nREFERENCE: ${href || "DOM element"}\n`
+        };
+      }
+    }
+
+    // 4. Document / Presentation / Spreadsheet / Code File Resolution
+    const candidateText = el.getAttribute("data-content") || el.getAttribute("data-text") || el.querySelector("pre, code")?.innerText || "";
+
+    // Fix Rule 1 & Rule 21: If candidateText is empty and el.innerText equals the filename chip, do NOT use el.innerText as fake content!
+    const rawDomText = (el.innerText || "").trim();
+    let inlineContent = candidateText.trim();
+    if (!inlineContent && rawDomText && rawDomText !== filename && rawDomText.length > filename.length + 10) {
+      inlineContent = rawDomText;
+    }
+
+    if (/ppt|presentation/i.test(cleanType)) {
+      assetType = "presentation";
+      purpose = "presentation_reference";
+      relationship = "presentation_reference";
+    } else if (/xls|csv|sheet|table/i.test(cleanType)) {
+      assetType = "spreadsheet";
+      purpose = "data_source";
+      relationship = "source_document";
+    } else if (/pdf|doc|docx|txt|md|resume/i.test(cleanType)) {
+      assetType = "document";
+      purpose = /resume|cv/i.test(filename) ? "resume_source" : "source_document";
+      relationship = "source_document";
+    } else if (/js|ts|py|java|cpp|c|h|cs|go|rs|json|sql|html|css|php|kt/i.test(cleanType)) {
+      assetType = "code";
+      purpose = "implementation";
+      relationship = "implementation_dependency";
+    }
+
+    if (inlineContent && inlineContent.length > 5 && inlineContent !== filename) {
+      return {
+        id: assetId,
+        name: filename,
+        type: assetType,
+        mimeType: `text/${cleanType || "plain"}`,
+        source: href || "DOM",
+        content: inlineContent,
+        metadata: { length: inlineContent.length },
+        purpose,
+        relationship,
+        relevance,
+        preserveOriginal: true,
+        originalData: href || inlineContent,
+        extractionStatus: "extracted",
+        status: "accessible",
+        formatted: `\n[ATTACHMENT: ${filename} (${assetType})]\nSTATUS: accessible\nCONTENT:\n${inlineContent}\n`
+      };
+    }
+
+    // 5. Preservation of Original Asset Reference when Text Extraction is Inaccessible/Empty
+    // Rule 4: If text extraction fails but original file/link exists, preserve the original asset!
+    const fallbackStatus = href ? "durable_reference" : "session_only";
+    return {
+      id: assetId,
+      name: filename,
+      type: assetType,
+      mimeType: `application/${cleanType || "octet-stream"}`,
+      source: href || "DOM",
+      content: "",
+      metadata: { note: "Original asset reference preserved; text not extracted directly from DOM chip" },
+      purpose,
+      relationship,
+      relevance,
+      preserveOriginal: true,
+      originalData: href || el.getAttribute("src") || null,
+      extractionStatus: fallbackStatus,
+      status: "preserved_original",
+      formatted: `\n[ATTACHMENT: ${filename} (${assetType})]\nSTATUS: preserved_original\nREFERENCE: ${href || "DOM Element Preserved"}\n`
+    };
+  }
+
+  // Helper: Extract Attached Files, Images, and Work Assets from Turn DOM (Async)
+  async function extractAttachmentsFromTurn(container) {
+    if (!container) return { text: "", attachments: [], workAssets: [] };
+    const selectors = [
+      'img[src]', '[data-testid*="image"]', '[class*="image"]', 'picture img',
+      '[data-testid*="attachment"]', '[class*="attachment"]', '[class*="file-chip"]',
+      '[class*="attached-file"]', '[aria-label*="attachment" i]', '[class*="file-preview"]',
+      '[data-testid*="file-"]', '[class*="file-container"]', '[class*="document-card"]',
+      '[class*="pasted"]', 'button[aria-label*="Pasted"]',
+      'a[download]', 'a[href*=".zip"]', 'a[href*=".pdf"]', 'a[href*=".docx"]', 'a[href*=".java"]', 'a[href*=".py"]', 'a[href*=".json"]', 'a[href*=".xlsx"]', 'a[href*=".pptx"]'
+    ];
+    const resolvedAttachments = [];
+    const resolvedWorkAssets = [];
+    const seenNames = new Set();
+    let formattedText = "";
+
+    const elements = Array.from(container.querySelectorAll(selectors.join(",")));
+    for (const el of elements) {
+      try {
+        // Skip tiny icon images or Sweater's own UI icons
+        if (el.tagName === "IMG") {
+          const src = el.getAttribute("src") || "";
+          if (!src || src.includes("data:image/svg+xml") || (el.clientWidth > 0 && el.clientWidth < 20 && el.clientHeight < 20)) {
+            continue;
+          }
+        }
+
+        const href = el.getAttribute("href") || el.getAttribute("src") || el.querySelector("a[href]")?.getAttribute("href") || "";
+        const name = (el.getAttribute("alt") || el.innerText || el.getAttribute("aria-label") || el.getAttribute("title") || el.getAttribute("download") || "").trim().split('\n')[0];
+        const key = `${name}_${href}`;
+        if (name && name.length > 1 && !seenNames.has(key)) {
+          seenNames.add(key);
+          const asset = await resolveAttachmentData(el, name, "", href);
+          resolvedAttachments.push(asset);
+          resolvedWorkAssets.push(asset);
+          formattedText += asset.formatted;
+        }
       } catch (e) { }
     }
-    return false;
+
+    return { text: formattedText, attachments: resolvedAttachments, workAssets: resolvedWorkAssets };
   }
 
   // Helper: Safe Filename
@@ -108,7 +354,7 @@
       return findInputInShadow(document.body, this.getInputSelectors());
     }
 
-    extractMessages() {
+    async extractMessages() {
       throw new Error("extractMessages() must be implemented by subclass");
     }
 
@@ -116,15 +362,10 @@
       const el = this.detectInput();
       if (!el) return false;
 
-      // Ensure focused
       el.focus();
       await sleep(150);
 
-      // Always inject compressed context as text so autofill/shortcuts work.
-      // File attach + auto-download is not used here — export/download is explicit only.
       const promptText = text || (capsule && capsule.continuePrompt) || "";
-
-      // Plain text injection
       if (el.tagName === "TEXTAREA") {
         return await this._injectReactTextarea(el, promptText);
       } else {
@@ -178,7 +419,6 @@
           el.dispatchEvent(new Event(type, { bubbles: true }));
         });
 
-        // Simulating space key press to trigger any reactive framework states
         el.dispatchEvent(new KeyboardEvent("keydown", { key: " ", code: "Space", bubbles: true }));
         await sleep(150);
         return el.value?.trim()?.length > 0;
@@ -220,7 +460,6 @@
     }
 
     async _wearAsFile(file, rawText) {
-      // 1. Try to upload to inputs
       const fileInput = document.querySelector('input[type="file"]');
       if (fileInput) {
         try {
@@ -233,7 +472,6 @@
         } catch (e) { }
       }
 
-      // 2. Drag & Drop simulation
       const dropTarget = this.detectInput()?.closest("form, [class*='composer'], [class*='input']") || this.detectInput();
       if (dropTarget) {
         try {
@@ -247,7 +485,6 @@
         } catch (e) { }
       }
 
-      // 3. Try to paste file as ClipboardEvent
       try {
         const pasteSuccess = await new Promise((resolve) => {
           let resolved = false;
@@ -269,7 +506,6 @@
         if (pasteSuccess) return true;
       } catch (e) { }
 
-      // 4. Fallback: copy text only (no automatic download — export is explicit)
       try {
         await navigator.clipboard.writeText(rawText);
       } catch (e) { }
@@ -289,13 +525,16 @@
       return host.includes("chatgpt.com") || host.includes("chat.openai.com");
     }
 
-    extractMessages() {
+    async extractMessages() {
       const msgs = [];
-      document.querySelectorAll("[data-message-author-role]").forEach(el => {
+      const nodes = Array.from(document.querySelectorAll("[data-message-author-role]"));
+      for (const el of nodes) {
         const role = el.getAttribute("data-message-author-role");
-        const content = (el.querySelector(".markdown") || el.querySelector(".whitespace-pre-wrap") || el)?.innerText?.trim();
-        if (content) msgs.push({ role: role === "assistant" ? "assistant" : "user", content });
-      });
+        let content = (el.querySelector(".markdown") || el.querySelector(".whitespace-pre-wrap") || el)?.innerText?.trim() || "";
+        const attach = await extractAttachmentsFromTurn(el);
+        if (attach.text) content += attach.text;
+        if (content) msgs.push({ role: role === "assistant" ? "assistant" : "user", content, attachments: attach.attachments });
+      }
       return msgs;
     }
   }
@@ -310,44 +549,54 @@
       return location.hostname.includes("claude.ai");
     }
 
-    extractMessages() {
-      // Primary: current claude.ai markup — user turns carry data-testid="user-message",
-      // assistant turns are rendered inside .font-claude-message. Query together to
-      // preserve document order (conversation order).
-      const primary = document.querySelectorAll('[data-testid="user-message"], .font-claude-message');
+    async extractMessages() {
+      const primary = Array.from(document.querySelectorAll('[data-testid="user-message"], .font-claude-message'));
       if (primary.length) {
-        const msgs = Array.from(primary)
-          .map(el => ({
-            role: el.matches('[data-testid="user-message"]') ? "user" : "assistant",
-            content: el.innerText.trim()
-          }))
-          .filter(m => m.content);
+        const msgs = [];
+        for (const el of primary) {
+          let content = el.innerText.trim();
+          const attach = await extractAttachmentsFromTurn(el.closest('[class*="turn"]') || el.parentElement);
+          if (attach.text && (!attach.attachments[0]?.name || !content.includes(attach.attachments[0].name))) content += attach.text;
+          if (content) {
+            msgs.push({
+              role: el.matches('[data-testid="user-message"]') ? "user" : "assistant",
+              content,
+              attachments: attach.attachments
+            });
+          }
+        }
         if (msgs.length) return msgs;
       }
 
-      // Secondary: older claude.ai builds used these testids/classes.
-      const legacy = document.querySelectorAll('[data-testid="human-turn"],[data-testid="ai-turn"],.human-turn,.ai-turn');
+      const legacy = Array.from(document.querySelectorAll('[data-testid="human-turn"],[data-testid="ai-turn"],.human-turn,.ai-turn'));
       if (legacy.length) {
-        const msgs = Array.from(legacy)
-          .map(t => ({
-            role: (t.getAttribute("data-testid") === "human-turn" || t.classList.contains("human-turn")) ? "user" : "assistant",
-            content: t.innerText.trim()
-          }))
-          .filter(m => m.content);
+        const msgs = [];
+        for (const t of legacy) {
+          let content = t.innerText.trim();
+          const attach = await extractAttachmentsFromTurn(t);
+          if (attach.text) content += attach.text;
+          if (content) {
+            msgs.push({
+              role: (t.getAttribute("data-testid") === "human-turn" || t.classList.contains("human-turn")) ? "user" : "assistant",
+              content,
+              attachments: attach.attachments
+            });
+          }
+        }
         if (msgs.length) return msgs;
       }
 
-      // Tertiary: walk per-turn render containers and infer role from whether a
-      // user-message node exists inside that turn. Guards against future class/testid renames.
-      const turnContainers = document.querySelectorAll('[data-test-render-count]');
+      const turnContainers = Array.from(document.querySelectorAll('[data-test-render-count]'));
       if (turnContainers.length) {
         const msgs = [];
-        turnContainers.forEach(t => {
-          const content = t.innerText.trim();
-          if (!content) return;
+        for (const t of turnContainers) {
+          let content = t.innerText.trim();
+          if (!content) continue;
+          const attach = await extractAttachmentsFromTurn(t);
+          if (attach.text) content += attach.text;
           const isUser = !!t.querySelector('[data-testid="user-message"], [class*="human"], [class*="user"]');
-          msgs.push({ role: isUser ? "user" : "assistant", content });
-        });
+          msgs.push({ role: isUser ? "user" : "assistant", content, attachments: attach.attachments });
+        }
         if (msgs.length) return msgs;
       }
 
@@ -365,11 +614,6 @@
       return location.hostname.includes("gemini.google.com");
     }
 
-    // Gemini's composer is a Quill-based rich-textarea, not a generic
-    // contenteditable/textarea — prioritize its specific selectors first so
-    // detectInput() (used by the FAB and the pending-injection autofill
-    // route) reliably finds the real composer instead of an unrelated
-    // contenteditable node on the page.
     getInputSelectors() {
       return [
         'rich-textarea [contenteditable="true"]',
@@ -380,11 +624,6 @@
       ];
     }
 
-    // Override with the same execCommand-based approach already proven to
-    // work for Gemini's editor (used by the same-tab quick-wear flow), so
-    // the cross-tab LLM-shortcut autofill (pending_injection) behaves
-    // identically instead of falling back to the generic base-class
-    // injector, which does not reliably fill Gemini's composer.
     async injectPrompt(text, capsule) {
       const promptText = text || (capsule && capsule.continuePrompt) || "";
       const el = this.detectInput();
@@ -416,16 +655,21 @@
       }
     }
 
-    extractMessages() {
+    async extractMessages() {
       const el = document.querySelector("chat-history,.conversation-container");
       if (el) {
         const msgs = [];
-        el.querySelectorAll(".query-content,.response-content").forEach(e => {
+        const turnNodes = Array.from(el.querySelectorAll(".query-content,.response-content"));
+        for (const e of turnNodes) {
+          let content = e.innerText.trim();
+          const attach = await extractAttachmentsFromTurn(e);
+          if (attach.text) content += attach.text;
           msgs.push({
             role: e.classList.contains("query-content") ? "user" : "assistant",
-            content: e.innerText.trim()
+            content,
+            attachments: attach.attachments
           });
-        });
+        }
         if (msgs.length) return msgs;
       }
       return [];
@@ -442,15 +686,18 @@
       return location.hostname.includes("grok.com") || (location.hostname.includes("x.com") && location.pathname.includes("grok"));
     }
 
-    extractMessages() {
+    async extractMessages() {
       const msgs = [];
-      document.querySelectorAll(".message-bubble,[class*='message'],[class*='response']").forEach(el => {
-        const text = el.innerText.trim();
+      const nodes = Array.from(document.querySelectorAll(".message-bubble,[class*='message'],[class*='response']"));
+      for (const el of nodes) {
+        let text = el.innerText.trim();
+        const attach = await extractAttachmentsFromTurn(el);
+        if (attach.text) text += attach.text;
         if (text.length > 10) {
           const isUser = el.classList.contains("user") || el.getAttribute("data-role") === "user" || el.closest("[class*='user']");
-          msgs.push({ role: isUser ? "user" : "assistant", content: text });
+          msgs.push({ role: isUser ? "user" : "assistant", content: text, attachments: attach.attachments });
         }
-      });
+      }
       return msgs;
     }
   }
@@ -465,15 +712,18 @@
       return location.hostname.includes("openrouter.ai");
     }
 
-    extractMessages() {
+    async extractMessages() {
       const msgs = [];
-      document.querySelectorAll('[class*="Message_container"]').forEach(el => {
+      const nodes = Array.from(document.querySelectorAll('[class*="Message_container"]'));
+      for (const el of nodes) {
         const isUser = el.querySelector('[class*="Message_user"]');
-        const text = el.innerText.trim();
+        let text = el.innerText.trim();
+        const attach = await extractAttachmentsFromTurn(el);
+        if (attach.text) text += attach.text;
         if (text) {
-          msgs.push({ role: isUser ? "user" : "assistant", content: text });
+          msgs.push({ role: isUser ? "user" : "assistant", content: text, attachments: attach.attachments });
         }
-      });
+      }
       return msgs;
     }
   }
@@ -488,15 +738,18 @@
       return location.hostname.includes("deepseek.com");
     }
 
-    extractMessages() {
+    async extractMessages() {
       const msgs = [];
-      document.querySelectorAll("[class*='message-and-actions'],[class*='msg-content']").forEach(el => {
-        const content = el.innerText.trim();
+      const nodes = Array.from(document.querySelectorAll("[class*='message-and-actions'],[class*='msg-content']"));
+      for (const el of nodes) {
+        let content = el.innerText.trim();
+        const attach = await extractAttachmentsFromTurn(el);
+        if (attach.text) content += attach.text;
         if (content) {
           const isUser = el.closest("[class*='user']") || el.closest("[class*='human']");
-          msgs.push({ role: isUser ? "user" : "assistant", content });
+          msgs.push({ role: isUser ? "user" : "assistant", content, attachments: attach.attachments });
         }
-      });
+      }
       return msgs;
     }
   }
@@ -511,18 +764,21 @@
       return true; // Match anything
     }
 
-    extractMessages() {
+    async extractMessages() {
       const msgs = [];
       const seen = new Set();
-      document.querySelectorAll('[class*="message"],[class*="turn"],[class*="response"],[class*="query"]').forEach(el => {
-        const text = el.innerText.trim();
+      const nodes = Array.from(document.querySelectorAll('[class*="message"],[class*="turn"],[class*="response"],[class*="query"]'));
+      for (const el of nodes) {
+        let text = el.innerText.trim();
+        const attach = await extractAttachmentsFromTurn(el);
+        if (attach.text) text += attach.text;
         if (text.length > 20 && !seen.has(text)) {
           seen.add(text);
           const cls = el.className.toLowerCase();
           const isUser = cls.includes("user") || cls.includes("human") || cls.includes("query");
-          msgs.push({ role: isUser ? "user" : "assistant", content: text });
+          msgs.push({ role: isUser ? "user" : "assistant", content: text, attachments: attach.attachments });
         }
-      });
+      }
       if (msgs.length === 0) {
         msgs.push({ role: "context", content: document.body.innerText.slice(0, 50000) });
       }
@@ -551,18 +807,21 @@
       ];
     }
 
-    extractMessages() {
+    async extractMessages() {
       const msgs = [];
       const seen = new Set();
-      document.querySelectorAll('[class*="message"],[class*="turn"],[class*="response"],[class*="query"]').forEach(el => {
-        const text = el.innerText.trim();
+      const nodes = Array.from(document.querySelectorAll('[class*="message"],[class*="turn"],[class*="response"],[class*="query"]'));
+      for (const el of nodes) {
+        let text = el.innerText.trim();
+        const attach = await extractAttachmentsFromTurn(el);
+        if (attach.text) text += attach.text;
         if (text.length > 10 && !seen.has(text)) {
           seen.add(text);
           const cls = (el.className || "").toLowerCase();
           const isUser = cls.includes("user") || cls.includes("human") || cls.includes("query");
-          msgs.push({ role: isUser ? "user" : "assistant", content: text });
+          msgs.push({ role: isUser ? "user" : "assistant", content: text, attachments: attach.attachments });
         }
-      });
+      }
       return msgs;
     }
   }
